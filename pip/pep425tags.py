@@ -4,6 +4,7 @@ from __future__ import absolute_import
 import re
 import sys
 import warnings
+import platform
 
 try:
     import sysconfig
@@ -33,10 +34,35 @@ def get_impl_ver():
     return ''.join(map(str, sys.version_info[:2]))
 
 
-def get_platform():
+def get_soabi(default=None):
+    soabi = sysconfig.get_config_var('SOABI')
+    # TODO: Should we limit this to Python 2?
+    # TODO: do other implementations define SOABI? PyPy doesn't by default
+    if not soabi and get_abbr_impl() == 'cp':
+        d = 'd' if hasattr(sys, 'pydebug') and sys.pydebug else ''
+        u = 'u' if sys.maxunicode == 0x10ffff else ''
+        soabi = 'cpython-%s%sm%s' % (get_impl_ver(), d, u)
+    if not soabi:
+        return default
+    return soabi
+
+
+def get_platforms():
     """Return our platform name 'win32', 'linux_x86_64'"""
     # XXX remove distutils dependency
-    return distutils.util.get_platform().replace('.', '_').replace('-', '_')
+    norm = lambda x: x.lower().replace('.', '_').replace('-', '_')
+    platforms = ['any']
+    plat = distutils.util.get_platform()
+    platforms.append(norm(plat))
+    # TODO: other "distro" OSs
+    if plat.startswith('linux'):
+        plat = '-'.join([plat] + list(platform.linux_distribution())[:2])
+        platforms.append(norm(plat))
+    return list(reversed(platforms))
+
+
+def get_platform():
+    return get_platforms()[0]
 
 
 def get_supported(versions=None, noarch=False):
@@ -61,7 +87,7 @@ def get_supported(versions=None, noarch=False):
     abis = []
 
     try:
-        soabi = sysconfig.get_config_var('SOABI')
+        soabi = get_soabi()
     except IOError as e:  # Issue #1074
         warnings.warn("{0}".format(e), RuntimeWarning)
         soabi = None
@@ -80,33 +106,34 @@ def get_supported(versions=None, noarch=False):
     abis.append('none')
 
     if not noarch:
-        arch = get_platform()
-        if sys.platform == 'darwin':
-            # support macosx-10.6-intel on macosx-10.9-x86_64
-            match = _osx_arch_pat.match(arch)
-            if match:
-                name, major, minor, actual_arch = match.groups()
-                actual_arches = [actual_arch]
-                if actual_arch in ('i386', 'ppc'):
-                    actual_arches.append('fat')
-                if actual_arch in ('i386', 'x86_64'):
-                    actual_arches.append('intel')
-                if actual_arch in ('i386', 'ppc', 'x86_64'):
-                    actual_arches.append('fat3')
-                if actual_arch in ('ppc64', 'x86_64'):
-                    actual_arches.append('fat64')
-                if actual_arch in ('i386', 'x86_64', 'intel', 'ppc', 'ppc64'):
-                    actual_arches.append('universal')
-                tpl = '{0}_{1}_%i_%s'.format(name, major)
-                arches = []
-                for m in range(int(minor) + 1):
-                    for a in actual_arches:
-                        arches.append(tpl % (m, a))
+        platforms = get_platforms()
+        arches = []
+        for arch in platforms:
+            if sys.platform == 'darwin':
+                # support macosx-10.6-intel on macosx-10.9-x86_64
+                match = _osx_arch_pat.match(arch)
+                if match:
+                    name, major, minor, actual_arch = match.groups()
+                    actual_arches = [actual_arch]
+                    if actual_arch in ('i386', 'ppc'):
+                        actual_arches.append('fat')
+                    if actual_arch in ('i386', 'x86_64'):
+                        actual_arches.append('intel')
+                    if actual_arch in ('i386', 'ppc', 'x86_64'):
+                        actual_arches.append('fat3')
+                    if actual_arch in ('ppc64', 'x86_64'):
+                        actual_arches.append('fat64')
+                    if actual_arch in ('i386', 'x86_64', 'intel', 'ppc', 'ppc64'):
+                        actual_arches.append('universal')
+                    tpl = '{0}_{1}_%i_%s'.format(name, major)
+                    for m in range(int(minor) + 1):
+                        for a in actual_arches:
+                            arches.append(tpl % (m, a))
+                else:
+                    # arch pattern didn't match (?!)
+                    arches.append(arch)
             else:
-                # arch pattern didn't match (?!)
-                arches = [arch]
-        else:
-            arches = [arch]
+                arches.append(arch)
 
         # Current version, current API (built specifically for our Python):
         for abi in abis:

@@ -3,6 +3,7 @@ from __future__ import absolute_import
 
 import re
 import sys
+import string
 import warnings
 import platform
 
@@ -13,13 +14,25 @@ except ImportError:  # pragma nocover
     import distutils.sysconfig as sysconfig
 import distutils.util
 
+from .platform import get_specific_platform
+
+
 _osx_arch_pat = re.compile(r'(.+)_(\d+)_(\d+)_(.+)')
+
+
+def normalize(s):
+    """Remove all non-alphanumeric characters.
+    """
+    s = list(s.lower())
+    for i, c in enumerate(s):
+        s[i:i+1] = c if c in string.ascii_letters + string.digits else '_'
+    return ''.join(s)
 
 
 def get_abbr_impl():
     """Return abbreviated implementation name."""
     if hasattr(sys, 'pypy_version_info'):
-        pyimpl = 'pp'
+        pyimpl = 'pp%s' % sys.version_info[0]
     elif sys.platform.startswith('java'):
         pyimpl = 'jy'
     elif sys.platform == 'cli':
@@ -31,33 +44,53 @@ def get_abbr_impl():
 
 def get_impl_ver():
     """Return implementation version."""
-    return ''.join(map(str, sys.version_info[:2]))
+    if get_abbr_impl()[0:2] == 'pp':
+        impl_ver = '%s%s' % (sys.pypy_version_info.major,
+                             sys.pypy_version_info.minor)
+    else:
+        impl_ver = sysconfig.get_config_var("py_version_nodot")
+        if not impl_ver:
+                impl_ver = ''.join(map(str, sys.version_info[:2]))
+    return impl_ver
 
 
-def get_soabi(default=None):
+def get_impl_ver_info():
+    if get_abbr_impl()[0:2] == 'pp':
+        return sys.pypy_version_info.major, sys.pypy_version_info.minor
+    else:
+        return sys.version_info[0], sys.version_info[1]
+
+
+def get_abi_tag(default=None):
     soabi = sysconfig.get_config_var('SOABI')
-    # TODO: Should we limit this to Python 2?
-    # TODO: do other implementations define SOABI? PyPy doesn't by default
-    if not soabi and get_abbr_impl() == 'cp':
+    if not soabi:
         d = 'd' if hasattr(sys, 'pydebug') and sys.pydebug else ''
         u = 'u' if sys.maxunicode == 0x10ffff else ''
-        soabi = 'cpython-%s%sm%s' % (get_impl_ver(), d, u)
-    if not soabi:
-        return default
-    return soabi
+        abi = '%s%s%sm%s' % (get_abbr_impl(), get_impl_ver(), d, u)
+    elif soabi.startswith('cpython-'):
+        abi = 'cp' + soabi.split('-', 1)[-1]
+    else:
+        abi = default
+    return abi
 
 
 def get_platforms():
     """Return our platform name 'win32', 'linux_x86_64'"""
     # XXX remove distutils dependency
-    norm = lambda x: x.lower().replace('.', '_').replace('-', '_')
     platforms = ['any']
     plat = distutils.util.get_platform()
-    platforms.append(norm(plat))
-    # TODO: other "distro" OSs
-    if plat.startswith('linux'):
-        plat = '-'.join([plat] + list(platform.linux_distribution())[:2])
-        platforms.append(norm(plat))
+    platforms.append(normalize(plat))
+    spec_plat = get_specific_platform()
+    if spec_plat is not None:
+        dist, major, full, stability = spec_plat
+        major_version = normalize('-'.join([plat] + [dist, major]))
+        full_version = normalize('-'.join([plat] + [dist, full]))
+        platforms.append(major_version)
+        if major_version != full_version:
+            platforms.append(full_version)
+    elif plat.startswith('linux'):
+        platforms.append(normalize('-'.join([plat] + ['unknown_distribution',
+                                                      'unknown_version'])))
     return list(reversed(platforms))
 
 
@@ -77,9 +110,10 @@ def get_supported(versions=None, noarch=False):
     # Versions must be given with respect to the preference
     if versions is None:
         versions = []
-        major = sys.version_info[0]
+        version_info = get_impl_ver_info()
+        major = version_info[0]
         # Support all previous minor Python versions.
-        for minor in range(sys.version_info[1], -1, -1):
+        for minor in range(version_info[1], -1, -1):
             versions.append(''.join(map(str, (major, minor))))
 
     impl = get_abbr_impl()
@@ -87,13 +121,13 @@ def get_supported(versions=None, noarch=False):
     abis = []
 
     try:
-        soabi = get_soabi()
+        abi = get_abi_tag()
     except IOError as e:  # Issue #1074
         warnings.warn("{0}".format(e), RuntimeWarning)
-        soabi = None
+        abi = None
 
-    if soabi and soabi.startswith('cpython-'):
-        abis[0:0] = ['cp' + soabi.split('-')[1]]
+    if abi:
+        abis[0:0] = [abi]
 
     abi3s = set()
     import imp

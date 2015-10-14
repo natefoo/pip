@@ -1,4 +1,83 @@
-**7.2.0 (unreleased)**
+**8.0.0 (unreleased)**
+
+* **BACKWARD INCOMPATIBLE** Drop support for Python 3.2.
+
+* **BACKWARD INCOMPATIBLE** Remove the ability to find any files other than the
+  ones directly linked from the index or find-links pages.
+
+* **BACKWARD INCOMPATIBLE** Remove the ``--download-cache`` which had been
+  deprecated and no-op'd in 6.0.
+
+* **BACKWARD INCOMPATIBLE** Remove the ``--log-explicit-levels`` which had been
+  deprecated in 6.0.
+
+* **BACKWARD INCOMPATIBLE** Abort installation of editable if the
+  provided #egg=name part does not match the metadata produced by
+  `setup.py egg_info`. :issue:`3143`.
+
+* Deprecate and no-op the ``--allow-external``, ``--allow-all-external``, and
+  ``--allow-unverified`` functionality that was added as part of PEP 438. With
+  changes made to the repository protocol made in PEP 470, these options are no
+  longer functional.
+
+* Allow ``--trusted-host`` within a requirements file. :issue:`2822`.
+
+* Allow ``--process-dependency-links`` within a requirements file. :issue:`1274`.
+
+* Allow ``--pre`` within a requirements file. :issue:`1273`.
+
+* Allow repository URLs with secure transports to count as trusted. (E.g.,
+  "git+ssh" is okay.) :issue:`2811`.
+
+* Implement a top-level ``pip download`` command and deprecate
+  ``pip install --download``.
+
+* Fixed :issue:`3141`, when uninstalling, look for the case of paths containing
+  symlinked directories (:pull:`3154`)
+
+* When installing, if building a wheel fails, clear up the build directory
+  before falling back to a source install. :issue:`3047`.
+
+* Fix user directory expansion when ``HOME=/``. Workaround for Python bug
+  http://bugs.python.org/issue14768, reported in :issue:`2996`.
+
+* Fixed :issue:`3009`, correct reporting of requirements file line numbers
+  (:pull:`3125`)
+
+
+**7.1.2 (2015-08-22)**
+
+* Don't raise an error if pip is not installed when checking for the latest pip
+  version.
+
+
+**7.1.1 (2015-08-20)**
+
+* Check that the wheel cache directory is writable before we attempt to write
+  cached files to them.
+
+* Move the pip version check until *after* any installs have been performed,
+  thus removing the extraenous warning when upgrading pip.
+
+* Added debug logging when using a cached wheel.
+
+* Respect platlib by default on platforms that have it separated from purlib.
+
+* Upgrade packaging to 15.3.
+
+  * Normalize post-release spellings for rev/r prefixes.
+
+* Upgrade distlib to 0.2.1.
+
+  * Updated launchers to decode shebangs using UTF-8. This allows non-ASCII
+    pathnames to be correctly handled.
+
+  * Ensured that the executable written to shebangs is normcased.
+
+  * Changed ScriptMaker to work better under Jython.
+
+* Upgrade ipaddress to 1.0.13.
+
 
 **7.1.0 (2015-06-30)**
 
@@ -73,6 +152,9 @@
   markers must now be quoted due to parser changes from (:pull:`2697`) and
   (:pull:`2725`).  For example, use ``"SomeProject; python_version < '2.7'"``,
   not simply ``SomeProject; python_version < '2.7'``
+
+* `get-pip.py` now installs the "wheel" package, when it's not already installed
+  (:pull:`2800`).
 
 * Ignores bz2 archives if Python wasn't compiled with bz2 support.
   Fixes :issue:`497`

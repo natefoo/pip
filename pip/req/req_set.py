@@ -9,6 +9,7 @@ import os
 from pip._vendor import pkg_resources
 from pip._vendor import requests
 
+from pip.compat import expanduser
 from pip.download import (url_to_path, unpack_url)
 from pip.exceptions import (InstallationError, BestVersionAlreadyInstalled,
                             DistributionNotFound, PreviousBuildDirError)
@@ -253,6 +254,13 @@ class RequirementSet(object):
                     # scanning.
                     result = []
                 elif not install_req.constraint:
+                    if (install_req.link and not (existing_req.link and
+                       install_req.link.path == existing_req.link.path)):
+                        self.reqs_to_cleanup.append(install_req)
+                        raise InstallationError(
+                            "Could not satisfy constraints for '%s': "
+                            "installation from path or url cannot be "
+                            "constrained to a version" % name)
                     # If we're now installing a constraint, mark the existing
                     # object for real installation.
                     existing_req.constraint = False
@@ -267,9 +275,12 @@ class RequirementSet(object):
             return result
 
     def has_requirement(self, project_name):
-        for name in project_name, project_name.lower():
-            if name in self.requirements or name in self.requirement_aliases:
-                return True
+        name = project_name.lower()
+        if (name in self.requirements and
+           not self.requirements[name].constraint or
+           name in self.requirement_aliases and
+           not self.requirements[self.requirement_aliases[name]].constraint):
+            return True
         return False
 
     @property
@@ -280,7 +291,7 @@ class RequirementSet(object):
     @property
     def is_download(self):
         if self.download_dir:
-            self.download_dir = os.path.expanduser(self.download_dir)
+            self.download_dir = expanduser(self.download_dir)
             if os.path.exists(self.download_dir):
                 return True
             else:

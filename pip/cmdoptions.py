@@ -122,15 +122,6 @@ log = partial(
     help="Path to a verbose appending log."
 )
 
-log_explicit_levels = partial(
-    Option,
-    # Writes the log levels explicitely to the log'
-    '--log-explicit-levels',
-    dest='log_explicit_levels',
-    action='store_true',
-    default=False,
-    help=SUPPRESS_HELP)
-
 no_input = partial(
     Option,
     # Don't ask for input
@@ -266,8 +257,7 @@ def allow_external():
         action="append",
         default=[],
         metavar="PACKAGE",
-        help="Allow the installation of a package even if it is externally "
-             "hosted",
+        help=SUPPRESS_HELP,
     )
 
 
@@ -277,7 +267,7 @@ allow_all_external = partial(
     dest="allow_all_external",
     action="store_true",
     default=False,
-    help="Allow the installation of all packages that are externally hosted",
+    help=SUPPRESS_HELP,
 )
 
 
@@ -312,8 +302,7 @@ def allow_unsafe():
         action="append",
         default=[],
         metavar="PACKAGE",
-        help="Allow the installation of a package even if it is hosted "
-        "in an insecure and unverifiable way",
+        help=SUPPRESS_HELP,
     )
 
 # Remove after 7.0
@@ -463,13 +452,6 @@ no_cache = partial(
     help="Disable the cache.",
 )
 
-download_cache = partial(
-    Option,
-    '--download-cache',
-    dest='download_cache',
-    default=None,
-    help=SUPPRESS_HELP)
-
 no_deps = partial(
     Option,
     '--no-deps', '--no-dependencies',
@@ -514,6 +496,14 @@ no_clean = partial(
     default=False,
     help="Don't clean up build directories.")
 
+pre = partial(
+    Option,
+    '--pre',
+    action='store_true',
+    default=False,
+    help="Include pre-release and development versions. By default, "
+         "pip only finds stable versions.")
+
 disable_pip_version_check = partial(
     Option,
     "--disable-pip-version-check",
@@ -547,7 +537,6 @@ general_group = {
         version,
         quiet,
         log,
-        log_explicit_levels,
         no_input,
         proxy,
         retries,
@@ -564,18 +553,24 @@ general_group = {
     ]
 }
 
-index_group = {
+non_deprecated_index_group = {
     'name': 'Package Index Options',
     'options': [
         index_url,
         extra_index_url,
         no_index,
         find_links,
+        process_dependency_links,
+    ]
+}
+
+index_group = {
+    'name': 'Package Index Options (including deprecated options)',
+    'options': non_deprecated_index_group['options'] + [
         allow_external,
         allow_all_external,
         no_allow_external,
         allow_unsafe,
         no_allow_unsafe,
-        process_dependency_links,
     ]
 }

@@ -99,15 +99,14 @@ treated as a comment.
 A line ending in an unescaped ``\`` is treated as a line continuation
 and the newline following it is effectively ignored.
 
+Comments are stripped *before* line continuations are processed.
+
 Additionally, the following Package Index Options are supported:
 
   *  :ref:`-i, --index-url <--index-url>`
   *  :ref:`--extra-index-url <--extra-index-url>`
   *  :ref:`--no-index <--no-index>`
   *  :ref:`-f, --find-links <--find-links>`
-  *  :ref:`--allow-external <--allow-external>`
-  *  :ref:`--allow-all-external <--allow-external>`
-  *  :ref:`--allow-unverified <--allow-unverified>`
   *  :ref:`--no-binary <install_--no-binary>`
   *  :ref:`--only-binary <install_--only-binary>`
 
@@ -124,9 +123,45 @@ If you wish, you can refer to other requirements files, like this::
 
     -r more_requirements.txt
 
-You can also refer to constraints files, like this::
+You can also refer to :ref:`constraints files <Constraints Files>`, like this::
 
     -c some_constraints.txt
+
+.. _`Example Requirements File`:
+
+Example Requirements File
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use ``pip install -r example-requirements.txt`` to install::
+
+    #
+    ####### example-requirements.txt #######
+    #
+    ###### Requirements without Version Specifiers ######
+    nose
+    nose-cov
+    beautifulsoup4
+    #
+    ###### Requirements with Version Specifiers ######
+    #   See https://www.python.org/dev/peps/pep-0440/#version-specifiers
+    docopt == 0.6.1             # Version Matching. Must be version 0.6.1
+    keyring >= 4.1.1            # Minimum version 4.1.1
+    coverage != 3.5             # Version Exclusion. Anything except version 3.5
+    Mopidy-Dirble ~= 1.1        # Compatible release. Same as >= 1.1, == 1.1.*
+    #
+    ###### Refer to other requirements files ######
+    -r other-requirements.txt
+    #
+    #
+    ###### A particular file ######
+    ./downloads/numpy-1.9.2-cp34-none-win32.whl
+    http://wxpython.org/Phoenix/snapshot-builds/wxPython_Phoenix-3.0.3.dev1820+49a8884-cp34-none-win_amd64.whl
+    #
+    ###### Additional Requirements without Version Specifiers ######
+    #   Same as 1st section, just here to show that you can put things in any order.
+    rejected
+    green
+    #
 
 .. _`Requirement Specifiers`:
 
@@ -224,37 +259,6 @@ that will enable installing pre-releases and development releases.
 
 .. _PEP426: http://www.python.org/dev/peps/pep-0426
 
-.. _`Externally Hosted Files`:
-
-Externally Hosted Files
-+++++++++++++++++++++++
-
-Starting with v1.4, pip will warn about installing any file that does not come
-from the primary index. As of version 1.5, pip defaults to ignoring these files
-unless asked to consider them.
-
-The ``pip install`` command supports a
-:ref:`--allow-external PROJECT <--allow-external>` option that will enable
-installing links that are linked directly from the simple index but to an
-external host that also have a supported hash fragment. Externally hosted
-files for all projects may be enabled using the
-:ref:`--allow-all-external <--allow-all-external>` flag to the ``pip install``
-command.
-
-The ``pip install`` command also supports a
-:ref:`--allow-unverified PROJECT <--allow-unverified>` option that will enable
-installing insecurely linked files. These are either directly linked (as above)
-files without a hash, or files that are linked from either the home page or the
-download url of a package.
-
-These options can be used in a requirements file.  Assuming some fictional
-`ExternalPackage` that is hosted external and unverified, then your requirements
-file would be like so::
-
-    --allow-external ExternalPackage
-    --allow-unverified ExternalPackage
-    ExternalPackage
-
 
 .. _`VCS Support`:
 
@@ -280,7 +284,11 @@ The "project name" component of the url suffix "egg=<project name>-<version>"
 is used by pip in its dependency logic to identify the project prior
 to pip downloading and analyzing the metadata.  The optional "version"
 component of the egg name is not functionally important.  It merely
-provides a human-readable clue as to what version is in use.
+provides a human-readable clue as to what version is in use. For projects
+where setup.py is not in the root of project, "subdirectory" component
+is used. Value of "subdirectory" component should be a path starting from root
+of the project to where setup.py is located.
+
 
 Git
 ~~~
@@ -386,7 +394,7 @@ similarly to that of a web browser. While the cache is on by default and is
 designed do the right thing by default you can disable the cache and always
 access PyPI by utilizing the ``--no-cache-dir`` option.
 
-When making any HTTP request pip will first check it's local cache to determine
+When making any HTTP request pip will first check its local cache to determine
 if it has a suitable response stored for that request which has not expired. If
 it does then it simply returns that response and doesn't make the request.
 
@@ -396,14 +404,14 @@ response telling pip to simply use the cached item (and refresh the expiration
 timer) or it will return a whole new response which pip can then store in the
 cache.
 
-When storing items in the cache pip will respect the ``CacheControl`` header
+When storing items in the cache, pip will respect the ``CacheControl`` header
 if it exists, or it will fall back to the ``Expires`` header if that exists.
 This allows pip to function as a browser would, and allows the index server
 to communicate to pip how long it is reasonable to cache any particular item.
 
 While this cache attempts to minimize network activity, it does not prevent
-network access all together. If you want a fast/local install solution that
-circumvents accessing PyPI, see :ref:`Fast & Local Installs`.
+network access altogether. If you want a local install solution that
+circumvents accessing PyPI, see :ref:`Installing from local packages`.
 
 The default location for the cache directory depends on the Operating System:
 
@@ -415,21 +423,23 @@ Windows
   :file:`<CSIDL_LOCAL_APPDATA>\\pip\\Cache`
 
 
+.. _`Wheel cache`:
+
 Wheel cache
 ***********
 
 Pip will read from the subdirectory ``wheels`` within the pip cache dir and use
 any packages found there. This is disabled via the same ``no-cache-dir`` option
 that disables the HTTP cache. The internal structure of that cache is not part
-of the Pip API. As of 7.0 pip uses a subdirectory per sdist that wheels were
+of the pip API. As of 7.0 pip uses a subdirectory per sdist that wheels were
 built from, and wheels within that subdirectory.
 
 Pip attempts to choose the best wheels from those built in preference to
 building a new wheel. Note that this means when a package has both optional
 C extensions and builds `py` tagged wheels when the C extension can't be built
-that pip will not attempt to build a better wheel for Python's that would have
+that pip will not attempt to build a better wheel for Pythons that would have
 supported it, once any generic wheel is built. To correct this, make sure that
-the wheel's are built with Python specific tags - e.g. pp on Pypy.
+the wheels are built with Python specific tags - e.g. pp on Pypy.
 
 When no wheels are found for an sdist, pip will attempt to build a wheel
 automatically and insert it into the wheel cache.

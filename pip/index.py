@@ -17,9 +17,9 @@ from pip._vendor.six.moves.urllib import request as urllib_request
 
 from pip.compat import ipaddress
 from pip.utils import (
-    Inf, cached_property, normalize_name, splitext, normalize_path,
-    ARCHIVE_EXTENSIONS, SUPPORTED_EXTENSIONS)
-from pip.utils.deprecation import RemovedInPip8Warning
+    Inf, cached_property, splitext, normalize_path,
+    ARCHIVE_EXTENSIONS, SUPPORTED_EXTENSIONS, canonicalize_name)
+from pip.utils.deprecation import RemovedInPip9Warning
 from pip.utils.logging import indent_log
 from pip.exceptions import (
     DistributionNotFound, BestVersionAlreadyInstalled, InvalidWheelFilename,
@@ -29,7 +29,7 @@ from pip.download import HAS_TLS, url_to_path, path_to_url
 from pip.models import PyPI
 from pip.wheel import Wheel, wheel_ext
 from pip.pep425tags import supported_tags, supported_tags_noarch, get_platform
-from pip._vendor import html5lib, requests, pkg_resources, six
+from pip._vendor import html5lib, requests, six
 from pip._vendor.packaging.version import parse as parse_version
 from pip._vendor.requests.exceptions import SSLError
 
@@ -37,14 +37,16 @@ from pip._vendor.requests.exceptions import SSLError
 __all__ = ['FormatControl', 'fmt_ctl_handle_mutual_exclude', 'PackageFinder']
 
 
-# Taken from Chrome's list of secure origins (See: http://bit.ly/1qrySKC)
 SECURE_ORIGINS = [
     # protocol, hostname, port
+    # Taken from Chrome's list of secure origins (See: http://bit.ly/1qrySKC)
     ("https", "*", "*"),
     ("*", "localhost", "*"),
     ("*", "127.0.0.0/8", "*"),
     ("*", "::1/128", "*"),
     ("file", "*", None),
+    # ssh is always secure.
+    ("ssh", "*", "*"),
 ]
 
 
@@ -99,9 +101,7 @@ class PackageFinder(object):
     packages, by reading pages and looking for appropriate links.
     """
 
-    def __init__(self, find_links, index_urls,
-                 allow_external=(), allow_unverified=(),
-                 allow_all_external=False, allow_all_prereleases=False,
+    def __init__(self, find_links, index_urls, allow_all_prereleases=False,
                  trusted_hosts=None, process_dependency_links=False,
                  session=None, format_control=None):
         """Create a PackageFinder.
@@ -137,33 +137,11 @@ class PackageFinder(object):
 
         self.format_control = format_control or FormatControl(set(), set())
 
-        # Do we allow (safe and verifiable) externally hosted files?
-        self.allow_external = set(normalize_name(n) for n in allow_external)
-
-        # Which names are allowed to install insecure and unverifiable files?
-        self.allow_unverified = set(
-            normalize_name(n) for n in allow_unverified
-        )
-
-        # Anything that is allowed unverified is also allowed external
-        self.allow_external |= self.allow_unverified
-
-        # Do we allow all (safe and verifiable) externally hosted files?
-        self.allow_all_external = allow_all_external
-
         # Domains that we won't emit warnings for when not using HTTPS
         self.secure_origins = [
             ("*", host, "*")
             for host in (trusted_hosts if trusted_hosts else [])
         ]
-
-        # Stores if we ignored any external links so that we can instruct
-        #   end users how to install them if no distributions are available
-        self.need_warn_external = False
-
-        # Stores if we ignored any unsafe links so that we can instruct
-        #   end users how to install them if no distributions are available
-        self.need_warn_unverified = False
 
         # Do we want to allow _all_ pre-releases?
         self.allow_all_prereleases = allow_all_prereleases
@@ -196,7 +174,7 @@ class PackageFinder(object):
             warnings.warn(
                 "Dependency Links processing has been deprecated and will be "
                 "removed in a future release.",
-                RemovedInPip8Warning,
+                RemovedInPip9Warning,
             )
             self.dependency_links.extend(links)
 
@@ -287,12 +265,17 @@ class PackageFinder(object):
         parsed = urllib_parse.urlparse(str(location))
         origin = (parsed.scheme, parsed.hostname, parsed.port)
 
+        # The protocol to use to see if the protocol matches.
+        # Don't count the repository type as part of the protocol: in
+        # cases such as "git+ssh", only use "ssh". (I.e., Only verify against
+        # the last scheme.)
+        protocol = origin[0].rsplit('+', 1)[-1]
+
         # Determine if our origin is a secure origin by looking through our
         # hardcoded list of secure origins, as well as any additional ones
         # configured on this PackageFinder instance.
         for secure_origin in (SECURE_ORIGINS + self.secure_origins):
-            # Check to see if the protocol matches
-            if origin[0] != secure_origin[0] and secure_origin[0] != "*":
+            if protocol != secure_origin[0] and secure_origin[0] != "*":
                 continue
 
             try:
@@ -354,7 +337,7 @@ class PackageFinder(object):
         """
 
         def mkurl_pypi_url(url):
-            loc = posixpath.join(url, project_url_name)
+            loc = posixpath.join(url, urllib_parse.quote(project_name.lower()))
             # For maximum compatibility with easy_install, ensure the path
             # ends in a trailing slash.  Although this isn't in the spec
             # (and PyPI can handle it without the slash) some other index
@@ -364,40 +347,13 @@ class PackageFinder(object):
                 loc = loc + '/'
             return loc
 
-        project_url_name = urllib_parse.quote(project_name.lower())
-
-        if self.index_urls:
-            # Check that we have the url_name correctly spelled:
-
-            # Only check main index if index URL is given
-            main_index_url = Link(
-                mkurl_pypi_url(self.index_urls[0]),
-                trusted=True,
-            )
-
-            page = self._get_page(main_index_url)
-            if page is None and PyPI.netloc not in str(main_index_url):
-                warnings.warn(
-                    "Failed to find %r at %s. It is suggested to upgrade "
-                    "your index to support normalized names as the name in "
-                    "/simple/{name}." % (project_name, main_index_url),
-                    RemovedInPip8Warning,
-                )
-
-                project_url_name = self._find_url_name(
-                    Link(self.index_urls[0], trusted=True),
-                    project_url_name,
-                ) or project_url_name
-
-        if project_url_name is not None:
-            return [mkurl_pypi_url(url) for url in self.index_urls]
-        return []
+        return [mkurl_pypi_url(url) for url in self.index_urls]
 
     def _find_all_versions(self, project_name):
         """Find all available versions for project_name
 
-        This checks index_urls, find_links and dependency_links
-        All versions found are returned
+        This checks index_urls, find_links and dependency_links.
+        All versions found are returned as an InstallationCandidate list.
 
         See _link_package_versions for details on which files are accepted
         """
@@ -418,8 +374,8 @@ class PackageFinder(object):
         # We want to filter out any thing which does not have a secure origin.
         url_locations = [
             link for link in itertools.chain(
-                (Link(url, trusted=True) for url in index_url_loc),
-                (Link(url, trusted=True) for url in fl_url_loc),
+                (Link(url) for url in index_url_loc),
+                (Link(url) for url in fl_url_loc),
                 (Link(url) for url in dep_url_loc),
             )
             if self._validate_secure_origin(logger, link)
@@ -431,12 +387,12 @@ class PackageFinder(object):
         for location in url_locations:
             logger.debug('* %s', location)
 
-        canonical_name = pkg_resources.safe_name(project_name).lower()
+        canonical_name = canonicalize_name(project_name)
         formats = fmt_ctl_formats(self.format_control, canonical_name)
-        search = Search(project_name.lower(), canonical_name, formats)
+        search = Search(project_name, canonical_name, formats)
         find_links_versions = self._package_versions(
             # We trust every directly linked archive in find_links
-            (Link(url, '-f', trusted=True) for url in self.find_links),
+            (Link(url, '-f') for url in self.find_links),
             search
         )
 
@@ -477,11 +433,11 @@ class PackageFinder(object):
         )
 
     def find_requirement(self, req, upgrade):
-        """Try to find an InstallationCandidate for req
+        """Try to find a Link matching req
 
         Expects req, an InstallRequirement and upgrade, a boolean
-        Returns an InstallationCandidate or None
-        May raise DistributionNotFound or BestVersionAlreadyInstalled
+        Returns a Link if found,
+        Raises DistributionNotFound or BestVersionAlreadyInstalled otherwise
         """
         all_versions = self._find_all_versions(req.name)
 
@@ -552,21 +508,6 @@ class PackageFinder(object):
                 )
             )
 
-            if self.need_warn_external:
-                logger.warning(
-                    "Some externally hosted files were ignored as access to "
-                    "them may be unreliable (use --allow-external %s to "
-                    "allow).",
-                    req.name,
-                )
-
-            if self.need_warn_unverified:
-                logger.warning(
-                    "Some insecure and unverifiable files were ignored"
-                    " (use --allow-unverified %s to allow).",
-                    req.name,
-                )
-
             raise DistributionNotFound(
                 'No matching distribution found for %s' % req
             )
@@ -591,49 +532,15 @@ class PackageFinder(object):
 
         selected_version = applicable_versions[0].location
 
-        if (selected_version.verifiable is not None and not
-                selected_version.verifiable):
-            logger.warning(
-                "%s is potentially insecure and unverifiable.", req.name,
-            )
-
         return selected_version
-
-    def _find_url_name(self, index_url, url_name):
-        """
-        Finds the true URL name of a package, when the given name isn't quite
-        correct.
-        This is usually used to implement case-insensitivity.
-        """
-        if not index_url.url.endswith('/'):
-            # Vaguely part of the PyPI API... weird but true.
-            # FIXME: bad to modify this?
-            index_url.url += '/'
-        page = self._get_page(index_url)
-        if page is None:
-            logger.critical('Cannot fetch index base URL %s', index_url)
-            return
-        norm_name = normalize_name(url_name)
-        for link in page.links:
-            base = posixpath.basename(link.path.rstrip('/'))
-            if norm_name == normalize_name(base):
-                logger.debug(
-                    'Real name of requirement %s is %s', url_name, base,
-                )
-                return base
-        return None
 
     def _get_pages(self, locations, project_name):
         """
         Yields (page, page_url) from the given locations, skipping
-        locations that have errors, and adding download/homepage links
+        locations that have errors.
         """
-        all_locations = list(locations)
         seen = set()
-        normalized = normalize_name(project_name)
-
-        while all_locations:
-            location = all_locations.pop(0)
+        for location in locations:
             if location in seen:
                 continue
             seen.add(location)
@@ -643,32 +550,6 @@ class PackageFinder(object):
                 continue
 
             yield page
-
-            for link in page.rel_links():
-
-                if (normalized not in self.allow_external and not
-                        self.allow_all_external):
-                    self.need_warn_external = True
-                    logger.debug(
-                        "Not searching %s for files because external "
-                        "urls are disallowed.",
-                        link,
-                    )
-                    continue
-
-                if (link.trusted is not None and not
-                        link.trusted and
-                        normalized not in self.allow_unverified):
-                    logger.debug(
-                        "Not searching %s for urls, it is an "
-                        "untrusted link and cannot produce safe or "
-                        "verifiable files.",
-                        link,
-                    )
-                    self.need_warn_unverified = True
-                    continue
-
-                all_locations.append(link)
 
     _py_version_re = re.compile(r'-py([123]\.?[0-9]?)$')
 
@@ -731,8 +612,7 @@ class PackageFinder(object):
                 except InvalidWheelFilename:
                     self._log_skipped_link(link, 'invalid wheel filename')
                     return
-                if (pkg_resources.safe_name(wheel.name).lower() !=
-                        search.canonical):
+                if canonicalize_name(wheel.name) != search.canonical:
                     self._log_skipped_link(
                         link, 'wrong project name (not %s)' % search.supplied)
                     return
@@ -777,29 +657,6 @@ class PackageFinder(object):
         if version is None:
             self._log_skipped_link(
                 link, 'wrong project name (not %s)' % search.supplied)
-            return
-
-        if (link.internal is not None and not
-                link.internal and not
-                normalize_name(search.supplied).lower()
-                in self.allow_external and not
-                self.allow_all_external):
-            # We have a link that we are sure is external, so we should skip
-            #   it unless we are allowing externals
-            self._log_skipped_link(link, 'it is externally hosted')
-            self.need_warn_external = True
-            return
-
-        if (link.verifiable is not None and not
-                link.verifiable and not
-                (normalize_name(search.supplied).lower()
-                    in self.allow_unverified)):
-            # We have a link that we are sure we cannot verify its integrity,
-            #   so we should skip it unless we are allowing unsafe installs
-            #   for this requirement.
-            self._log_skipped_link(
-                link, 'it is an insecure and unverifiable file')
-            self.need_warn_unverified = True
             return
 
         match = self._py_version_re.search(version)
@@ -850,7 +707,7 @@ def egg_info_matches(
 class HTMLPage(object):
     """Represents one page, along with its URL"""
 
-    def __init__(self, content, url, headers=None, trusted=None):
+    def __init__(self, content, url, headers=None):
         # Determine if we have any encoding information in our headers
         encoding = None
         if headers and "Content-Type" in headers:
@@ -867,7 +724,6 @@ class HTMLPage(object):
         )
         self.url = url
         self.headers = headers
-        self.trusted = trusted
 
     def __str__(self):
         return self.url
@@ -944,10 +800,7 @@ class HTMLPage(object):
                 )
                 return
 
-            inst = cls(
-                resp.content, resp.url, resp.headers,
-                trusted=link.trusted,
-            )
+            inst = cls(resp.content, resp.url, resp.headers)
         except requests.HTTPError as exc:
             level = 2 if exc.response.status_code == 404 else 1
             cls._handle_fail(link, exc, url, level=level)
@@ -984,20 +837,6 @@ class HTMLPage(object):
         return resp.headers.get("Content-Type", "")
 
     @cached_property
-    def api_version(self):
-        metas = [
-            x for x in self.parsed.findall(".//meta")
-            if x.get("name", "").lower() == "api-version"
-        ]
-        if metas:
-            try:
-                return int(metas[0].get("value", None))
-            except (TypeError, ValueError):
-                pass
-
-        return None
-
-    @cached_property
     def base_url(self):
         bases = [
             x for x in self.parsed.findall(".//base")
@@ -1017,36 +856,7 @@ class HTMLPage(object):
                 url = self.clean_link(
                     urllib_parse.urljoin(self.base_url, href)
                 )
-
-                # Determine if this link is internal. If that distinction
-                #   doesn't make sense in this context, then we don't make
-                #   any distinction.
-                internal = None
-                if self.api_version and self.api_version >= 2:
-                    # Only api_versions >= 2 have a distinction between
-                    #   external and internal links
-                    internal = bool(
-                        anchor.get("rel") and
-                        "internal" in anchor.get("rel").split()
-                    )
-
-                yield Link(url, self, internal=internal)
-
-    def rel_links(self, rels=('homepage', 'download')):
-        """Yields all links with the given relations"""
-        rels = set(rels)
-
-        for anchor in self.parsed.findall(".//a"):
-            if anchor.get("rel") and anchor.get("href"):
-                found_rels = set(anchor.get("rel").split())
-                # Determine the intersection between what rels were found and
-                #   what rels were being looked for
-                if found_rels & rels:
-                    href = anchor.get("href")
-                    url = self.clean_link(
-                        urllib_parse.urljoin(self.base_url, href)
-                    )
-                    yield Link(url, self, trusted=False)
+                yield Link(url, self)
 
     _clean_re = re.compile(r'[^a-z0-9$&+,/:;=?@.#%_\\|-]', re.I)
 
@@ -1060,7 +870,7 @@ class HTMLPage(object):
 
 class Link(object):
 
-    def __init__(self, url, comes_from=None, internal=None, trusted=None):
+    def __init__(self, url, comes_from=None):
 
         # url can be a UNC windows share
         if url != Inf and url.startswith('\\\\'):
@@ -1068,8 +878,6 @@ class Link(object):
 
         self.url = url
         self.comes_from = comes_from
-        self.internal = internal
-        self.trusted = trusted
 
     def __str__(self):
         if self.comes_from:
@@ -1177,41 +985,6 @@ class Link(object):
         return posixpath.basename(self.url.split('#', 1)[0].split('?', 1)[0])
 
     @property
-    def verifiable(self):
-        """
-        Returns True if this link can be verified after download, False if it
-        cannot, and None if we cannot determine.
-        """
-        trusted = self.trusted or getattr(self.comes_from, "trusted", None)
-        if trusted is not None and trusted:
-            # This link came from a trusted source. It *may* be verifiable but
-            #   first we need to see if this page is operating under the new
-            #   API version.
-            try:
-                api_version = getattr(self.comes_from, "api_version", None)
-                api_version = int(api_version)
-            except (ValueError, TypeError):
-                api_version = None
-
-            if api_version is None or api_version <= 1:
-                # This link is either trusted, or it came from a trusted,
-                #   however it is not operating under the API version 2 so
-                #   we can't make any claims about if it's safe or not
-                return
-
-            if self.hash:
-                # This link came from a trusted source and it has a hash, so we
-                #   can consider it safe.
-                return True
-            else:
-                # This link came from a trusted source, using the new API
-                #   version, and it does not have a hash. It is NOT verifiable
-                return False
-        elif trusted is not None:
-            # This link came from an untrusted source and we cannot trust it
-            return False
-
-    @property
     def is_wheel(self):
         return self.ext == wheel_ext
 
@@ -1258,7 +1031,7 @@ def fmt_ctl_handle_mutual_exclude(value, target, other):
         if name == ':none:':
             target.clear()
             continue
-        name = pkg_resources.safe_name(name).lower()
+        name = canonicalize_name(name)
         other.discard(name)
         target.add(name)
 

@@ -6,7 +6,6 @@ import re
 import shutil
 import sys
 import tempfile
-import warnings
 import zipfile
 
 from distutils.util import change_root
@@ -29,10 +28,10 @@ from pip.locations import (
 )
 from pip.utils import (
     display_path, rmtree, ask_path_exists, backup_dir, is_installable_dir,
-    dist_in_usersite, dist_in_site_packages, egg_link_path, make_path_relative,
+    dist_in_usersite, dist_in_site_packages, egg_link_path,
     call_subprocess, read_text_file, FakeFile, _make_build_dir, ensure_dir,
+    get_installed_version, canonicalize_name
 )
-from pip.utils.deprecation import RemovedInPip8Warning
 from pip.utils.logging import indent_log
 from pip.req.req_uninstall import UninstallPathSet
 from pip.vcs import vcs
@@ -91,7 +90,7 @@ class InstallRequirement(object):
         self._temp_build_dir = None
         # Used to store the global directory where the _temp_build_dir should
         # have been created. Cf _correct_build_location method.
-        self._ideal_global_dir = None
+        self._ideal_build_dir = None
         # True if the editable should be updated:
         self.update = update
         # Set to True after successful installation
@@ -259,6 +258,8 @@ class InstallRequirement(object):
             self._link = link
         else:
             self._link = self._wheel_cache.cached_wheel(link, self.name)
+            if self._link != link:
+                logger.debug('Using cached wheel link: %s', self._link)
 
     @property
     def specifier(self):
@@ -420,6 +421,14 @@ class InstallRequirement(object):
                     self.pkg_info()["Version"],
                 ]))
             self._correct_build_location()
+        else:
+            metadata_name = canonicalize_name(self.pkg_info()["Name"])
+            if canonicalize_name(self.req.project_name) != metadata_name:
+                raise InstallationError(
+                    'Running setup.py (path:%s) egg_info for package %s '
+                    'produced metadata for project name %s' % (
+                        self.setup_py, self.name, metadata_name)
+                )
 
     # FIXME: This is a lame hack, entirely for PasteScript which has
     # a self-provided entry point that causes this awkwardness
@@ -527,20 +536,7 @@ exec(compile(
 
     @property
     def installed_version(self):
-        # Create a requirement that we'll look for inside of setuptools.
-        req = pkg_resources.Requirement.parse(self.name)
-
-        # We want to avoid having this cached, so we need to construct a new
-        # working set each time.
-        working_set = pkg_resources.WorkingSet()
-
-        # Get the installed distribution from our working set
-        dist = working_set.find(req)
-
-        # Check to see if we got an installed distribution or not, if we did
-        # we want to return it's version.
-        if dist:
-            return dist.version
+        return get_installed_version(self.name)
 
     def assert_source_matches_version(self):
         assert self.source_dir
@@ -645,16 +641,15 @@ exec(compile(
                     paths_to_remove.add(path)
                     paths_to_remove.add(path + '.py')
                     paths_to_remove.add(path + '.pyc')
+                    paths_to_remove.add(path + '.pyo')
 
         elif distutils_egg_info:
-            warnings.warn(
-                "Uninstalling a distutils installed project ({0}) has been "
-                "deprecated and will be removed in a future version. This is "
-                "due to the fact that uninstalling a distutils project will "
-                "only partially uninstall the project.".format(self.name),
-                RemovedInPip8Warning,
+            raise UninstallationError(
+                "Detected a distutils installed project ({0!r}) which we "
+                "cannot uninstall. The metadata provided by distutils does "
+                "not contain a list of files which have been installed, so "
+                "pip does not know which files to uninstall.".format(self.name)
             )
-            paths_to_remove.add(distutils_egg_info)
 
         elif dist.location.endswith('.egg'):
             # package installed by easy_install
@@ -899,7 +894,7 @@ exec(compile(
                     if os.path.isdir(filename):
                         filename += os.path.sep
                     new_lines.append(
-                        make_path_relative(
+                        os.path.relpath(
                             prepend_root(filename), egg_info_dir)
                     )
             inst_files_path = os.path.join(egg_info_dir, 'installed-files.txt')
@@ -1075,6 +1070,8 @@ def parse_editable(editable_req, default_vcs=None):
         .[some_extra]
     """
 
+    from pip.index import Link
+
     url = editable_req
     extras = None
 
@@ -1096,9 +1093,10 @@ def parse_editable(editable_req, default_vcs=None):
         url_no_extras = path_to_url(url_no_extras)
 
     if url_no_extras.lower().startswith('file:'):
+        package_name = Link(url_no_extras).egg_fragment
         if extras:
             return (
-                None,
+                package_name,
                 url_no_extras,
                 pkg_resources.Requirement.parse(
                     '__placeholder__' + extras
@@ -1106,7 +1104,7 @@ def parse_editable(editable_req, default_vcs=None):
                 {},
             )
         else:
-            return None, url_no_extras, None, {}
+            return package_name, url_no_extras, None, {}
 
     for version_control in vcs:
         if url.lower().startswith('%s:' % version_control):

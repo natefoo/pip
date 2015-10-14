@@ -44,6 +44,14 @@ class TestUserCacheDir:
 
         assert appdirs.user_cache_dir("pip") == "/home/test/.other-cache/pip"
 
+    def test_user_cache_dir_linux_home_slash(self, monkeypatch):
+        # Verify that we are not affected by http://bugs.python.org/issue14768
+        monkeypatch.delenv("XDG_CACHE_HOME")
+        monkeypatch.setenv("HOME", "/")
+        monkeypatch.setattr(sys, "platform", "linux2")
+
+        assert appdirs.user_cache_dir("pip") == "/.cache/pip"
+
 
 class TestSiteConfigDirs:
 
@@ -154,6 +162,14 @@ class TestUserDataDir:
 
         assert appdirs.user_data_dir("pip") == "/home/test/.other-share/pip"
 
+    def test_user_data_dir_linux_home_slash(self, monkeypatch):
+        # Verify that we are not affected by http://bugs.python.org/issue14768
+        monkeypatch.delenv("XDG_DATA_HOME")
+        monkeypatch.setenv("HOME", "/")
+        monkeypatch.setattr(sys, "platform", "linux2")
+
+        assert appdirs.user_data_dir("pip") == "/.local/share/pip"
+
 
 class TestUserConfigDir:
 
@@ -214,43 +230,10 @@ class TestUserConfigDir:
 
         assert appdirs.user_config_dir("pip") == "/home/test/.other-config/pip"
 
-
-class TestUserLogDir:
-
-    def test_user_log_dir_win(self, monkeypatch):
-        @pretend.call_recorder
-        def _get_win_folder(base):
-            return "C:\\Users\\test\\AppData\\Local"
-
-        monkeypatch.setattr(
-            appdirs,
-            "_get_win_folder",
-            _get_win_folder,
-            raising=False,
-        )
-        monkeypatch.setattr(appdirs, "WINDOWS", True)
-
-        assert (appdirs.user_log_dir("pip").replace("/", "\\") ==
-                "C:\\Users\\test\\AppData\\Local\\pip\\Logs")
-        assert _get_win_folder.calls == [pretend.call("CSIDL_LOCAL_APPDATA")]
-
-    def test_user_log_dir_osx(self, monkeypatch):
-        monkeypatch.setenv("HOME", "/home/test")
-        monkeypatch.setattr(sys, "platform", "darwin")
-
-        assert (appdirs.user_log_dir("pip") ==
-                "/home/test/Library/Logs/pip")
-
-    def test_uuser_log_dir_linux(self, monkeypatch):
-        monkeypatch.delenv("XDG_CACHE_HOME")
-        monkeypatch.setenv("HOME", "/home/test")
+    def test_user_config_dir_linux_home_slash(self, monkeypatch):
+        # Verify that we are not affected by http://bugs.python.org/issue14768
+        monkeypatch.delenv("XDG_CONFIG_HOME")
+        monkeypatch.setenv("HOME", "/")
         monkeypatch.setattr(sys, "platform", "linux2")
 
-        assert appdirs.user_log_dir("pip") == "/home/test/.cache/pip/log"
-
-    def test_user_log_dir_linux_override(self, monkeypatch):
-        monkeypatch.setenv("XDG_CACHE_HOME", "/home/test/.other-cache")
-        monkeypatch.setenv("HOME", "/home/test")
-        monkeypatch.setattr(sys, "platform", "linux2")
-
-        assert appdirs.user_log_dir("pip") == "/home/test/.other-cache/pip/log"
+        assert appdirs.user_config_dir("pip") == "/.config/pip"

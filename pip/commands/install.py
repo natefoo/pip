@@ -14,14 +14,13 @@ except ImportError:
 from pip.req import RequirementSet
 from pip.basecommand import RequirementCommand
 from pip.locations import virtualenv_no_global, distutils_scheme
-from pip.index import PackageFinder
 from pip.exceptions import (
     InstallationError, CommandError, PreviousBuildDirError,
 )
 from pip import cmdoptions
 from pip.utils import ensure_dir
 from pip.utils.build import BuildDirectory
-from pip.utils.deprecation import RemovedInPip8Warning
+from pip.utils.deprecation import RemovedInPip10Warning
 from pip.utils.filesystem import check_path_owner
 from pip.wheel import WheelCache, WheelBuilder
 
@@ -82,7 +81,6 @@ class InstallCommand(RequirementCommand):
                   "regardless of what's already installed."),
         )
 
-        cmd_opts.add_option(cmdoptions.download_cache())
         cmd_opts.add_option(cmdoptions.src())
 
         cmd_opts.add_option(
@@ -157,13 +155,7 @@ class InstallCommand(RequirementCommand):
         cmd_opts.add_option(cmdoptions.no_use_wheel())
         cmd_opts.add_option(cmdoptions.no_binary())
         cmd_opts.add_option(cmdoptions.only_binary())
-
-        cmd_opts.add_option(
-            '--pre',
-            action='store_true',
-            default=False,
-            help="Include pre-release and development versions. By default, "
-                 "pip only finds stable versions.")
+        cmd_opts.add_option(cmdoptions.pre())
 
         cmd_opts.add_option(cmdoptions.no_clean())
 
@@ -175,30 +167,41 @@ class InstallCommand(RequirementCommand):
         self.parser.insert_option_group(0, index_opts)
         self.parser.insert_option_group(0, cmd_opts)
 
-    def _build_package_finder(self, options, index_urls, session):
-        """
-        Create a package finder appropriate to this install command.
-        This method is meant to be overridden by subclasses, not
-        called directly.
-        """
-        return PackageFinder(
-            find_links=options.find_links,
-            format_control=options.format_control,
-            index_urls=index_urls,
-            allow_external=options.allow_external,
-            allow_unverified=options.allow_unverified,
-            allow_all_external=options.allow_all_external,
-            trusted_hosts=options.trusted_hosts,
-            allow_all_prereleases=options.pre,
-            process_dependency_links=options.process_dependency_links,
-            session=session,
-        )
-
     def run(self, options, args):
         cmdoptions.resolve_wheel_no_use_binary(options)
         cmdoptions.check_install_build_global(options)
 
+        if options.allow_external:
+            warnings.warn(
+                "--allow-external has been deprecated and will be removed in "
+                "the future. Due to changes in the repository protocol, it no "
+                "longer has any effect.",
+                RemovedInPip10Warning,
+            )
+
+        if options.allow_all_external:
+            warnings.warn(
+                "--allow-all-external has been deprecated and will be removed "
+                "in the future. Due to changes in the repository protocol, it "
+                "no longer has any effect.",
+                RemovedInPip10Warning,
+            )
+
+        if options.allow_unverified:
+            warnings.warn(
+                "--allow-unverified has been deprecated and will be removed "
+                "in the future. Due to changes in the repository protocol, it "
+                "no longer has any effect.",
+                RemovedInPip10Warning,
+            )
+
         if options.download_dir:
+            warnings.warn(
+                "pip install --download has been deprecated and will be "
+                "removed in the future. Pip now has a download command that "
+                "should be used instead.",
+                RemovedInPip10Warning,
+            )
             options.ignore_installed = True
 
         if options.build_dir:
@@ -229,22 +232,10 @@ class InstallCommand(RequirementCommand):
             install_options.append('--home=' + temp_target_dir)
 
         global_options = options.global_options or []
-        index_urls = [options.index_url] + options.extra_index_urls
-        if options.no_index:
-            logger.info('Ignoring indexes: %s', ','.join(index_urls))
-            index_urls = []
-
-        if options.download_cache:
-            warnings.warn(
-                "--download-cache has been deprecated and will be removed in "
-                "the future. Pip now automatically uses and configures its "
-                "cache.",
-                RemovedInPip8Warning,
-            )
 
         with self._build_session(options) as session:
 
-            finder = self._build_package_finder(options, index_urls, session)
+            finder = self._build_package_finder(options, session)
             build_delete = (not (options.no_clean or options.build_dir))
             wheel_cache = WheelCache(options.cache_dir, options.format_control)
             if options.cache_dir and not check_path_owner(options.cache_dir):

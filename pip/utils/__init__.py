@@ -15,7 +15,7 @@ import tarfile
 import zipfile
 
 from pip.exceptions import InstallationError
-from pip.compat import console_to_str, stdlib_pkgs
+from pip.compat import console_to_str, expanduser, stdlib_pkgs
 from pip.locations import (
     site_packages, user_site, running_under_virtualenv, virtualenv_no_global,
     write_delete_marker_file,
@@ -31,15 +31,16 @@ else:
     from io import StringIO
 
 __all__ = ['rmtree', 'display_path', 'backup_dir',
-           'ask', 'Inf', 'normalize_name', 'splitext',
+           'ask', 'Inf', 'splitext',
            'format_size', 'is_installable_dir',
            'is_svn_page', 'file_contents',
            'split_leading_dir', 'has_leading_dir',
-           'make_path_relative', 'normalize_path',
+           'normalize_path', 'canonicalize_name',
            'renames', 'get_terminal_size', 'get_prog',
            'unzip_file', 'untar_file', 'unpack_file', 'call_subprocess',
            'captured_stdout', 'remove_tracebacks', 'ensure_dir',
-           'ARCHIVE_EXTENSIONS', 'SUPPORTED_EXTENSIONS']
+           'ARCHIVE_EXTENSIONS', 'SUPPORTED_EXTENSIONS',
+           'get_installed_version']
 
 
 logger = logging.getLogger(__name__)
@@ -185,13 +186,6 @@ Inf = _Inf()  # this object is not currently used as a sortable in our code
 del _Inf
 
 
-_normalize_re = re.compile(r'[^a-z]', re.I)
-
-
-def normalize_name(name):
-    return _normalize_re.sub('-', name.lower())
-
-
 def format_size(bytes):
     if bytes > 1000 * 1000:
         return '%.1fMB' % (bytes / 1000.0 / 1000)
@@ -227,7 +221,6 @@ def file_contents(filename):
 
 
 def split_leading_dir(path):
-    path = str(path)
     path = path.lstrip('/').lstrip('\\')
     if '/' in path and (('\\' in path and path.find('/') < path.find('\\')) or
                         '\\' not in path):
@@ -253,41 +246,12 @@ def has_leading_dir(paths):
     return True
 
 
-def make_path_relative(path, rel_to):
-    """
-    Make a filename relative, where the filename path, and it is
-    relative to rel_to
-
-        >>> make_path_relative('/usr/share/something/a-file.pth',
-        ...                    '/usr/share/another-place/src/Directory')
-        '../../../something/a-file.pth'
-        >>> make_path_relative('/usr/share/something/a-file.pth',
-        ...                    '/home/user/src/Directory')
-        '../../../usr/share/something/a-file.pth'
-        >>> make_path_relative('/usr/share/a-file.pth', '/usr/share/')
-        'a-file.pth'
-    """
-    path_filename = os.path.basename(path)
-    path = os.path.dirname(path)
-    path = os.path.normpath(os.path.abspath(path))
-    rel_to = os.path.normpath(os.path.abspath(rel_to))
-    path_parts = path.strip(os.path.sep).split(os.path.sep)
-    rel_to_parts = rel_to.strip(os.path.sep).split(os.path.sep)
-    while path_parts and rel_to_parts and path_parts[0] == rel_to_parts[0]:
-        path_parts.pop(0)
-        rel_to_parts.pop(0)
-    full_parts = ['..'] * len(rel_to_parts) + path_parts + [path_filename]
-    if full_parts == ['']:
-        return '.' + os.path.sep
-    return os.path.sep.join(full_parts)
-
-
 def normalize_path(path, resolve_symlinks=True):
     """
     Convert a path to its canonical, case-normalized, absolute version.
 
     """
-    path = os.path.expanduser(path)
+    path = expanduser(path)
     if resolve_symlinks:
         path = os.path.realpath(path)
     else:
@@ -845,3 +809,25 @@ class cached_property(object):
             return self
         value = obj.__dict__[self.func.__name__] = self.func(obj)
         return value
+
+
+def get_installed_version(dist_name):
+    """Get the installed version of dist_name avoiding pkg_resources cache"""
+    # Create a requirement that we'll look for inside of setuptools.
+    req = pkg_resources.Requirement.parse(dist_name)
+
+    # We want to avoid having this cached, so we need to construct a new
+    # working set each time.
+    working_set = pkg_resources.WorkingSet()
+
+    # Get the installed distribution from our working set
+    dist = working_set.find(req)
+
+    # Check to see if we got an installed distribution or not, if we did
+    # we want to return it's version.
+    return dist.version if dist else None
+
+
+def canonicalize_name(name):
+    """Convert an arbitrary string to a canonical name used for comparison"""
+    return pkg_resources.safe_name(name).lower()

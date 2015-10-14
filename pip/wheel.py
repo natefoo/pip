@@ -25,13 +25,14 @@ from email.parser import Parser
 from pip._vendor.six import StringIO
 
 import pip
+from pip.compat import expanduser
 from pip.download import path_to_url, unpack_url
-from pip.exceptions import InvalidWheelFilename, UnsupportedWheel
+from pip.exceptions import (
+    InstallationError, InvalidWheelFilename, UnsupportedWheel)
 from pip.locations import distutils_scheme, PIP_DELETE_MARKER_FILENAME
 from pip import pep425tags
 from pip.utils import (
-    call_subprocess, ensure_dir, make_path_relative, captured_stdout,
-    rmtree)
+    call_subprocess, ensure_dir, captured_stdout, rmtree, canonicalize_name)
 from pip.utils.logging import indent_log
 from pip._vendor.distlib.scripts import ScriptMaker
 from pip._vendor import pkg_resources
@@ -56,7 +57,7 @@ class WheelCache(object):
         :param format_control: A pip.index.FormatControl object to limit
             binaries being read from the cache.
         """
-        self._cache_dir = os.path.expanduser(cache_dir) if cache_dir else None
+        self._cache_dir = expanduser(cache_dir) if cache_dir else None
         self._format_control = format_control
 
     def cached_wheel(self, link, package_name):
@@ -116,7 +117,7 @@ def cached_wheel(cache_dir, link, format_control, package_name):
         return link
     if not package_name:
         return link
-    canonical_name = pkg_resources.safe_name(package_name).lower()
+    canonical_name = canonicalize_name(package_name)
     formats = pip.index.fmt_ctl_formats(format_control, canonical_name)
     if "binary" not in formats:
         return link
@@ -141,7 +142,7 @@ def cached_wheel(cache_dir, link, format_control, package_name):
         return link
     candidates.sort()
     path = os.path.join(root, candidates[0][1])
-    return pip.index.Link(path_to_url(path), trusted=True)
+    return pip.index.Link(path_to_url(path))
 
 
 def rehash(path, algo='sha256', blocksize=1 << 20):
@@ -269,7 +270,7 @@ def move_wheel_files(name, req, wheeldir, user=False, home=None, root=None,
         logger.debug(stdout.getvalue())
 
     def normpath(src, p):
-        return make_path_relative(src, p).replace(os.path.sep, '/')
+        return os.path.relpath(src, p).replace(os.path.sep, '/')
 
     def record_installed(srcfile, destfile, modified=False):
         """Map archive RECORD paths to installation RECORD paths."""
@@ -392,6 +393,13 @@ def move_wheel_files(name, req, wheeldir, user=False, home=None, root=None,
     # See https://bitbucket.org/pypa/distlib/issue/34/
     # See https://bitbucket.org/pypa/distlib/issue/33/
     def _get_script_text(entry):
+        if entry.suffix is None:
+            raise InstallationError(
+                "Invalid script entry point: %s for req: %s - A callable "
+                "suffix is required. Cf https://packaging.python.org/en/"
+                "latest/distributing.html#console-scripts for more "
+                "information." % (entry, req)
+            )
         return maker.script_template % {
             "module": entry.prefix,
             "import_name": entry.suffix.split(".")[0],
@@ -700,18 +708,23 @@ class WheelBuilder(object):
                     logger.info('Stored in directory: %s', output_dir)
                     return wheel_path
                 except:
-                    return None
+                    pass
+            # Ignore return, we can't do anything else useful.
+            self._clean_one(req)
             return None
         finally:
             rmtree(tempd)
 
-    def __build_one(self, req, tempd):
-        base_args = [
+    def _base_setup_args(self, req):
+        return [
             sys.executable, '-c',
             "import setuptools;__file__=%r;"
             "exec(compile(open(__file__).read().replace('\\r\\n', '\\n'), "
             "__file__, 'exec'))" % req.setup_py
         ] + list(self.global_options)
+
+    def __build_one(self, req, tempd):
+        base_args = self._base_setup_args(req)
 
         logger.info('Running setup.py bdist_wheel for %s', req.name)
         logger.debug('Destination directory: %s', tempd)
@@ -722,6 +735,18 @@ class WheelBuilder(object):
             return True
         except:
             logger.error('Failed building wheel for %s', req.name)
+            return False
+
+    def _clean_one(self, req):
+        base_args = self._base_setup_args(req)
+
+        logger.info('Running setup.py clean for %s', req.name)
+        clean_args = base_args + ['clean', '--all']
+        try:
+            call_subprocess(clean_args, cwd=req.source_dir, show_stdout=False)
+            return True
+        except:
+            logger.error('Failed cleaning build dir for %s', req.name)
             return False
 
     def build(self, autobuilding=False):
@@ -764,7 +789,7 @@ class WheelBuilder(object):
                         continue
                     if "binary" not in pip.index.fmt_ctl_formats(
                             self.finder.format_control,
-                            pkg_resources.safe_name(req.name).lower()):
+                            canonicalize_name(req.name)):
                         logger.info(
                             "Skipping bdist_wheel for %s, due to binaries "
                             "being disabled for it.", req.name)
@@ -814,7 +839,7 @@ class WheelBuilder(object):
                             self.requirement_set.build_dir)
                         # Update the link for this.
                         req.link = pip.index.Link(
-                            path_to_url(wheel_file), trusted=True)
+                            path_to_url(wheel_file))
                         assert req.link.is_wheel
                         # extract the wheel into the dir
                         unpack_url(

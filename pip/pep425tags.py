@@ -3,6 +3,7 @@ from __future__ import absolute_import
 
 import re
 import sys
+import string
 import warnings
 import platform
 import logging
@@ -14,11 +15,22 @@ except ImportError:  # pragma nocover
     import distutils.sysconfig as sysconfig
 import distutils.util
 
+from .platform import get_specific_platform
+
 
 logger = logging.getLogger(__name__)
 
 
 _osx_arch_pat = re.compile(r'(.+)_(\d+)_(\d+)_(.+)')
+
+
+def normalize(s):
+    """Remove all non-alphanumeric characters.
+    """
+    s = list(s.lower())
+    for i, c in enumerate(s):
+        s[i:i+1] = c if c in string.ascii_letters + string.digits else '_'
+    return ''.join(s)
 
 
 def get_config_var(var):
@@ -32,7 +44,7 @@ def get_config_var(var):
 def get_abbr_impl():
     """Return abbreviated implementation name."""
     if hasattr(sys, 'pypy_version_info'):
-        pyimpl = 'pp'
+        pyimpl = 'pp%s' % sys.version_info[0]
     elif sys.platform.startswith('java'):
         pyimpl = 'jy'
     elif sys.platform == 'cli':
@@ -114,7 +126,27 @@ def get_abi_tag():
     return abi
 
 
-def get_platform():
+def get_impl_ver_info():
+    if get_abbr_impl()[0:2] == 'pp':
+        return sys.pypy_version_info.major, sys.pypy_version_info.minor
+    else:
+        return sys.version_info[0], sys.version_info[1]
+
+
+def get_abi_tag(default=None):
+    soabi = sysconfig.get_config_var('SOABI')
+    if not soabi:
+        d = 'd' if hasattr(sys, 'pydebug') and sys.pydebug else ''
+        u = 'u' if sys.maxunicode == 0x10ffff else ''
+        abi = '%s%s%sm%s' % (get_abbr_impl(), get_impl_ver(), d, u)
+    elif soabi.startswith('cpython-'):
+        abi = 'cp' + soabi.split('-', 1)[-1]
+    else:
+        abi = default
+    return abi
+
+
+def get_platforms():
     """Return our platform name 'win32', 'linux_x86_64'"""
     if sys.platform == 'darwin':
         # distutils.util.get_platform() returns the release based on the value
@@ -124,7 +156,25 @@ def get_platform():
         split_ver = release.split('.')
         return 'macosx_{0}_{1}_{2}'.format(split_ver[0], split_ver[1], machine)
     # XXX remove distutils dependency
-    return distutils.util.get_platform().replace('.', '_').replace('-', '_')
+    platforms = ['any']
+    plat = distutils.util.get_platform()
+    platforms.append(normalize(plat))
+    spec_plat = get_specific_platform()
+    if spec_plat is not None:
+        dist, major, full, stability = spec_plat
+        major_version = normalize('-'.join([plat] + [dist, major]))
+        full_version = normalize('-'.join([plat] + [dist, full]))
+        platforms.append(major_version)
+        if major_version != full_version:
+            platforms.append(full_version)
+    elif plat.startswith('linux'):
+        platforms.append(normalize('-'.join([plat] + ['unknown_distribution',
+                                                      'unknown_version'])))
+    return list(reversed(platforms))
+
+
+def get_platform():
+    return get_platforms()[0]
 
 
 def get_supported(versions=None, noarch=False):
@@ -164,33 +214,34 @@ def get_supported(versions=None, noarch=False):
     abis.append('none')
 
     if not noarch:
-        arch = get_platform()
-        if sys.platform == 'darwin':
-            # support macosx-10.6-intel on macosx-10.9-x86_64
-            match = _osx_arch_pat.match(arch)
-            if match:
-                name, major, minor, actual_arch = match.groups()
-                actual_arches = [actual_arch]
-                if actual_arch in ('i386', 'ppc'):
-                    actual_arches.append('fat')
-                if actual_arch in ('i386', 'x86_64'):
-                    actual_arches.append('intel')
-                if actual_arch in ('ppc64', 'x86_64'):
-                    actual_arches.append('fat64')
-                if actual_arch in ('i386', 'ppc', 'x86_64'):
-                    actual_arches.append('fat32')
-                if actual_arch in ('i386', 'x86_64', 'intel', 'ppc', 'ppc64'):
-                    actual_arches.append('universal')
-                tpl = '{0}_{1}_%i_%s'.format(name, major)
-                arches = []
-                for m in reversed(range(int(minor) + 1)):
-                    for a in actual_arches:
-                        arches.append(tpl % (m, a))
+        platforms = get_platforms()
+        arches = []
+        for arch in platforms:
+            if sys.platform == 'darwin':
+                # support macosx-10.6-intel on macosx-10.9-x86_64
+                match = _osx_arch_pat.match(arch)
+                if match:
+                    name, major, minor, actual_arch = match.groups()
+                    actual_arches = [actual_arch]
+                    if actual_arch in ('i386', 'ppc'):
+                        actual_arches.append('fat')
+                    if actual_arch in ('i386', 'x86_64'):
+                        actual_arches.append('intel')
+                    if actual_arch in ('i386', 'ppc', 'x86_64'):
+                        actual_arches.append('fat3')
+                    if actual_arch in ('ppc64', 'x86_64'):
+                        actual_arches.append('fat64')
+                    if actual_arch in ('i386', 'x86_64', 'intel', 'ppc', 'ppc64'):
+                        actual_arches.append('universal')
+                    tpl = '{0}_{1}_%i_%s'.format(name, major)
+                    for m in reversed(range(int(minor) + 1)):
+                        for a in actual_arches:
+                            arches.append(tpl % (m, a))
+                else:
+                    # arch pattern didn't match (?!)
+                    arches.append(arch)
             else:
-                # arch pattern didn't match (?!)
-                arches = [arch]
-        else:
-            arches = [arch]
+                arches.append(arch)
 
         # Current version, current API (built specifically for our Python):
         for abi in abis:

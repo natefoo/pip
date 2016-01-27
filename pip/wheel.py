@@ -17,6 +17,7 @@ import stat
 import sys
 import tempfile
 import warnings
+import json
 
 from base64 import urlsafe_b64encode
 from email.parser import Parser
@@ -643,6 +644,8 @@ class Wheel(object):
             for y in self.abis for z in self.plats
         )
 
+        self.__plat_compat = None
+
     def support_index_min(self, tags=None):
         """
         Return the lowest index that one of the wheel's file_tag combinations
@@ -652,6 +655,7 @@ class Wheel(object):
         """
         if tags is None:  # for mock
             tags = pep425tags.supported_tags
+        tags = self.add_compat_tags(tags)
         indexes = [tags.index(c) for c in self.file_tags if c in tags]
         return min(indexes) if indexes else None
 
@@ -659,7 +663,34 @@ class Wheel(object):
         """Is this wheel supported on this system?"""
         if tags is None:  # for mock
             tags = pep425tags.supported_tags
+        tags = self.add_compat_tags(tags)
         return bool(set(tags).intersection(self.file_tags))
+
+    def add_compat_tags(self, tags):
+        r = []
+        for tag in tags:
+            r.append(tag)
+            impl, abi, plat = tag
+            for compat_plat in self.plat_compat.get(plat, {}).get('install', []):
+                r.append((impl, abi, compat_plat))
+        return r
+
+    @property
+    def plat_compat(self):
+        if self.__plat_compat is None:
+            compat_files = [os.path.join(os.sep, 'etc', 'python', 'binary-compatibility.cfg')]
+            if 'VIRTUAL_ENV' in os.environ:
+                compat_files.append(os.path.join(os.environ['VIRTUAL_ENV'], 'binary-compatibility.cfg'))
+            self.__plat_compat = {}
+            for compat_file in compat_files:
+                try:
+                    with open(compat_file) as compat:
+                        self.__plat_compat.update(json.load(compat))
+                except IOError as exc:
+                    # Should EACCES issue a warning instead?
+                    if exc.errno != errno.ENOENT:
+                        raise
+        return self.__plat_compat
 
 
 class WheelBuilder(object):

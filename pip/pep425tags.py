@@ -154,7 +154,7 @@ def get_platforms():
         # be signficantly older than the user's current machine.
         release, _, machine = platform.mac_ver()
         split_ver = release.split('.')
-        return 'macosx_{0}_{1}_{2}'.format(split_ver[0], split_ver[1], machine)
+        return ['macosx_{0}_{1}_{2}'.format(split_ver[0], split_ver[1], machine)]
     # XXX remove distutils dependency
     platforms = ['any']
     plat = distutils.util.get_platform()
